@@ -1,8 +1,9 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import * as E from "fp-ts/Either";
 import * as TE from "fp-ts/TaskEither";
+import * as O from "fp-ts/Option";
 import { pipe, flow } from "fp-ts/lib/function";
-import type { Console } from 'node:console'
+import type { Console } from "node:console";
 
 export type TransactionClient = Prisma.TransactionClient;
 
@@ -40,7 +41,7 @@ export class DoctorJobs<
    *
    * @type {() => Promise<Input>}
    */
-  getJob: () => Promise<Input>;
+  getJob: () => Promise<O.Option<Input>>;
 
   /**
    * A function for creating a new job in the queue.
@@ -77,7 +78,7 @@ export class DoctorJobs<
    * @param {{
    *   prismaClient: PrismaClient;
    *   parseJob: (input: Input) => E.Either<Error, Jobs>;
-   *   getJob: (client: PrismaClient) => Promise<any>;
+   *   getJob: (client: PrismaClient) => Promise<O.Option<Input>>;
    *   createJob: (client: TransactionClient, data: string) => Promise<void>;
    *   createDeadLetter: (client: PrismaClient, input: DeadLetters) => Promise<void>;
    *   getDeadLetters: (client: PrismaClient) => Promise<DeadLetters[]>;
@@ -91,11 +92,11 @@ export class DoctorJobs<
     createJob,
     createDeadLetter,
     getDeadLetters,
-    logger
+    logger,
   }: {
     prismaClient: PrismaClient;
     parseJob: (input: Input) => E.Either<Error, Jobs>;
-    getJob: (client: PrismaClient) => Promise<Input>;
+    getJob: (client: PrismaClient) => Promise<O.Option<Input>>;
     createJob: (client: TransactionClient, data: string) => Promise<void>;
     createDeadLetter: (
       client: PrismaClient,
@@ -110,7 +111,7 @@ export class DoctorJobs<
     this.createJob = createJob;
     this.createDeadLetter = createDeadLetter.bind(this, this.client);
     this.getDeadLetters = getDeadLetters.bind(this, this.client);
-    this.log = logger 
+    this.log = logger;
 
     // I'm binding this, because run eventually gets run in a setTimeout
     // but needs refrence to `this`
@@ -147,43 +148,45 @@ export class DoctorJobs<
    */
   async run(handleJobs: (job: Jobs) => Promise<void>): Promise<void> {
     this.log.info(`Attempting to find job`);
-    const job = await this.getJob();
-
-    if (job) {
-      this.log.info(`Running job with id ${job.id}`);
-      return pipe(
-        TE.fromEither(this.parseJob(job)),
-        flow(
-          TE.chain((parsed) =>
-            TE.tryCatch(
-              () => handleJobs(parsed),
-              (err) => new Error(`handling job failed: ${err}`)
-            )
-          ),
-          TE.fold(
-            // An error has been returned somewhere in the chain, so we delete the job
-            // and add it to the DLQ
-            (err) => async () => {
-              this.log.error(`An error occured: ${err}`);
-              await this.client.job.delete({ where: { id: job.id } });
-              await this.client.deadLetters.create({
-                data: {
-                  id: job.id,
-                  data: job.data,
+    pipe(
+      await this.getJob(),
+      O.match(
+        () => this.log.info("No job found"),
+        (job: Input) => {
+          this.log.info(`Running job with id ${job.id}`);
+          return pipe(
+            TE.fromEither(this.parseJob(job)),
+            flow(
+              TE.chain((parsed) =>
+                TE.tryCatch(
+                  () => handleJobs(parsed),
+                  (err) => new Error(`handling job failed: ${err}`)
+                )
+              ),
+              TE.fold(
+                // An error has been returned somewhere in the chain, so we delete the job
+                // and add it to the DLQ
+                (err) => async () => {
+                  this.log.error(`An error occured: ${err}`);
+                  await this.client.job.delete({ where: { id: job.id } });
+                  await this.client.deadLetters.create({
+                    data: {
+                      id: job.id,
+                      data: job.data,
+                    },
+                  });
                 },
-              });
-            },
 
-            // The job has succeeded
-            () => async () => {
-              this.log.info(`Finished processing job with id ${job.id}`);
-              await this.client.job.delete({ where: { id: job.id } });
-            }
-          )
-        )
-      )();
-    } else {
-      this.log.info("No job found");
-    }
+                // The job has succeeded
+                () => async () => {
+                  this.log.info(`Finished processing job with id ${job.id}`);
+                  await this.client.job.delete({ where: { id: job.id } });
+                }
+              )
+            )
+          )();
+        }
+      )
+    );
   }
 }

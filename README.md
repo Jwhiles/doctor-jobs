@@ -100,9 +100,16 @@ const doctorJob = new DoctorJob<ParsedJob, Job, DeadLetters>({
   prismaClient,
   parseJob,
   getJob: async (client) => {
-    return await client.job.findFirst({
+    const job = await client.job.findFirst({
       orderBy: { createdAt: "asc" },
     });
+
+    if (job === null) {
+      return O.none
+    } else {
+      return O.some(job)
+    }
+  },
   },
   createJob: async (tx, data) => {
     await tx.job.create({
@@ -149,4 +156,4 @@ async function createLoginLinkForClient(email: string) {
 ```
 
 ## Disclaimer
-This is extracted from a personal project, has not been code reviewed, and almost certainly is not something you want to use.
+This is extracted from a personal project, has not been code reviewed, and almost certainly is not something you want to use. There will probably be breaking changes.
