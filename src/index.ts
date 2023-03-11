@@ -147,11 +147,10 @@ export class DoctorJobs<
    * @returns {Promise<void>} - A Promise that resolves with nothing when the function completes.
    */
   async run(handleJobs: (job: Jobs) => Promise<void>): Promise<void> {
-    this.log.info(`Attempting to find job`);
     pipe(
       await this.getJob(),
       O.match(
-        () => this.log.info("No job found"),
+        () => {},
         (job: Input) => {
           this.log.info(`Running job with id ${job.id}`);
           return pipe(
