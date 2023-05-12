@@ -51,11 +51,18 @@ export class DoctorJobs<
   createJob: (client: TransactionClient, data: string) => Promise<any>;
 
   /**
+   * A function for removing a job once it has been handled.
+   *
+   * @type {(client: TransactionClient, jobId: string) => Promise<any>}
+   */
+  deleteJob: (client: TransactionClient, jobId: string) => Promise<any>;
+
+  /**
    * A function for creating a new dead letter in case of job processing failure.
    *
-   * @type {(input: DeadLetters) => Promise<void>}
+   * @type {(input: Input) => Promise<void>}
    */
-  createDeadLetter: (input: DeadLetters) => Promise<void>;
+  createDeadLetter: (input: Input) => Promise<void>;
 
   /**
    * A function for getting all dead letters.
@@ -80,6 +87,7 @@ export class DoctorJobs<
    *   parseJob: (input: Input) => E.Either<Error, Jobs>;
    *   getJob: (client: PrismaClient) => Promise<O.Option<Input>>;
    *   createJob: (client: TransactionClient, data: string) => Promise<void>;
+   *   deleteJob: (client: TransactionClient, jobId: string) => Promise<void>;
    *   createDeadLetter: (client: PrismaClient, input: DeadLetters) => Promise<void>;
    *   getDeadLetters: (client: PrismaClient) => Promise<DeadLetters[]>;
    *   logger?: Console;
@@ -90,6 +98,7 @@ export class DoctorJobs<
     parseJob,
     getJob,
     createJob,
+    deleteJob,
     createDeadLetter,
     getDeadLetters,
     logger,
@@ -98,6 +107,7 @@ export class DoctorJobs<
     parseJob: (input: Input) => E.Either<Error, Jobs>;
     getJob: (client: PrismaClient) => Promise<O.Option<Input>>;
     createJob: (client: TransactionClient, data: string) => Promise<void>;
+    deleteJob: (client: TransactionClient, jobId: string) => Promise<void>;
     createDeadLetter: (
       client: PrismaClient,
       input: DeadLetters
@@ -109,6 +119,7 @@ export class DoctorJobs<
     this.parseJob = parseJob;
     this.getJob = getJob.bind(this, this.client);
     this.createJob = createJob;
+    this.deleteJob = deleteJob;
     this.createDeadLetter = createDeadLetter.bind(this, this.client);
     this.getDeadLetters = getDeadLetters.bind(this, this.client);
     this.log = logger;
@@ -167,13 +178,8 @@ export class DoctorJobs<
                 // and add it to the DLQ
                 (err) => async () => {
                   this.log.error(`An error occured: ${err}`);
-                  await this.client.job.delete({ where: { id: job.id } });
-                  await this.client.deadLetters.create({
-                    data: {
-                      id: job.id,
-                      data: job.data,
-                    },
-                  });
+                  await this.deleteJob(this.client, job.id);
+                  await this.createDeadLetter(job);
                 },
 
                 // The job has succeeded
